@@ -17,8 +17,11 @@ You need to install couple Ansible collections wich are not included in ansible-
 To install it, use: 
 
 ansible-galaxy collection install community.general
+
 ansible-galaxy collection install community.mysql
+
 ansible-galaxy install geerlingguy.mysql
+
 ansible-galaxy install geerlingguy.ntp
 
 To run playbook use:
