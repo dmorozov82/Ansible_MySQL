@@ -1,0 +1,231 @@
+# Playbook to setup common settings/MySQL/NGINX/
+
+---
+- hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    created_username: developer
+    nginx_dir: '/etc/nginx'
+    www_user: 'deploy'
+    mysqlsoftware:
+      - mysql-server
+      - mysql-client
+  vars_files:
+    - vars/main.yml
+  tasks:
+  
+# Aptitude Installation Task
+    - name: Install aptitude
+      apt:
+        name: aptitude
+        state: latest
+        update_cache: true
+        
+# Adding Sudo User
+    - name: Setup passwordless sudo
+      lineinfile:
+        path: /etc/sudoers
+        state: present
+        regexp: '^%sudo'
+        line: '%sudo ALL=(ALL) NOPASSWD: ALL'
+        validate: '/usr/sbin/visudo -cf %s' 
+
+    - name: Create a new regular user with sudo privileges
+      user:
+        name: "{{ created_username }}"
+        state: present
+        groups: sudo
+        append: true
+        create_home: true 
+        
+# Delete default user
+    - name: user example not present
+      user:
+        name: debian
+        state: "absent"
+        remove: true    # or yes
+        
+# Add ssh-key and disable root password login
+    - name: Set authorized key for remote user
+      ansible.posix.authorized_key:
+        user: "{{ created_username }}"
+        state: present
+        key: "{{ lookup('file', lookup('env','HOME') + '/.ssh/id_rsa.pub') }}"
+
+    - name: Disable password authentication for root
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        state: present
+        regexp: '^#?PermitRootLogin'
+        line: 'PermitRootLogin prohibit-password'
+        
+# Package installation
+    - name: Update apt and install required system packages
+      apt:
+        pkg:
+        #  - vim # optional
+        #  - ufw # firewall optional 
+          - libfreetype6 
+          - libfreetype6-dev 
+          - zlib1g 
+          - zlib1g-dev
+          - libxml2 
+          - libxml2-dev 
+          - libxslt1-dev 
+          - libxslt1.1 
+          - gcc 
+          - curl 
+          - make 
+          - libcurl4-openssl-dev 
+          - libssl-dev 
+          - mc 
+          - wget 
+          - aptitude 
+          - unzip 
+          - htop 
+          - nload 
+          - libffi-dev 
+          - libmariadbclient-dev 
+          - gnupg2 
+          - pkg-config 
+          - tcl 
+          - git 
+          - sendmail 
+          - openssl 
+          - python-minimal 
+          - python-setuptools
+          - screen 
+          - ethtool 
+          - openssl 
+          - nodejs 
+          - npm
+        state: latest
+        update_cache: true
+        
+ # Manualy install Python 3.9.6 from source code      
+    - name: Build nginx 
+      shell: |
+        cd /home/developer 
+        wget https://www.python.org/ftp/python/3.9.6/Python-3.9.6.tgz 
+        tar -xzf Python-3.9.6.tgz 
+        cd Python-3.9.6/
+        ./configure --prefix=/opt/python3 && make && make install 
+        ./opt/python3/bin/pip3.9 install --upgrade pip 
+        ./opt/python3/bin/pip3.9 install pycurl mysqlclient mysql.connector certifi redis sentry-sdk
+        
+# Set kernel parameters with sysctl
+    - name: sysctl settings
+      sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        state: present
+        sysctl_set: yes
+        reload: yes     # optional 
+      with_items:
+        - { name: 'fs.nr_open', value: '2000000' }
+        - { name: 'fs.file-max', value: '5000000' }
+        - { name: 'net.ipv4.ip_local_port_range', value: '1024 65535' }
+
+
+# Create directory structure
+    - name: Make sure the projects_conf, projects and projects/panels directories exist
+      file:
+        path: "{{nginx_dir}}/{{item}}"
+        owner: "{{ www_user }}"
+        group: "{{ www_user }}"
+        mode: 0777
+        recurse: yes
+        state: directory
+      with_items: ["projects_conf", "projects", "projects/panels"]
+
+    - name: Creates GeoIP directory
+      file:
+        path: /var/www/server/frontend/shared/runtime/GeoIP
+        state: directory
+        owner: "{{ www_user }}"
+        group: "{{ www_user }}"
+        mode: 0777
+        recurse: yes
+
+# Set PAM limits (The default file is /etc/security/limits.conf)
+    - name: Add or modify nofile soft limit for the user root 
+      community.general.pam_limits:
+        domain: root
+        limit_type: soft
+        limit_item: nofile
+        value: 6500535
+
+    - name: Add or modify nofile hard limit for the user root 
+      community.general.pam_limits:
+        domain: root
+        limit_type: hard
+        limit_item: nofile
+        value: 6500536
+
+    - name: Add or modify soft nofile limits for wildcard domain 
+      community.general.pam_limits:
+        domain: '*'
+        limit_type: soft
+        limit_item: nofile
+        value: 40000000
+
+    - name: Add or modify nofile hard limit for wildcard domain 
+      community.general.pam_limits:
+        domain: '*'
+        limit_type: hard
+        limit_item: nofile
+        value: 40000000
+
+# Change systemd specific limits
+    - name: Changing DefaultLimitNOFILE=6500535 in system.conf
+      lineinfile: 
+        dest: /etc/systemd/system.conf      #dest or path
+        state: present
+        regexp: "DefaultLimitNOFILE"        #need to check debian 11 defaults, could be commented
+        line: "DefaultLimitNOFILE=65536"
+        
+# Install composer
+    - name: Install composer
+      apt:
+        name: composer
+        state: latest
+          
+# Install NGINX/common
+    - name: ensure nginx is at the latest version
+      apt: name=nginx state=latest
+ 
+    - name: start nginx
+      service:
+          name: nginx
+          state: started
+
+    - name: copy the nginx config file and restart nginx
+      copy:
+        src: ./nginx.conf
+        dest: {{nginx_dir}}/nginx.conf
+
+    # - name: copy the content of the web site
+      # copy:
+        # src: ../static-site-src/
+        # dest: "/home/{{www_root}}/static-site"
+        
+    - name: restart nginx
+      service:
+        name: nginx
+        state: restarted
+
+# Install MySQL
+  roles:
+    - role: geerlingguy.mysql
+    
+# Set timezone
+    - role: geerlingguy.ntp
+      vars:
+        ntp_timezone: Etc/UTC
+        ntp_manage_config: true
+        ntp_servers:
+          - "0.europe.pool.ntp.org iburst"
+          - "1.europe.pool.ntp.org iburst"
+          - "2.europe.pool.ntp.org iburst"
+          - "3.europe.pool.ntp.org iburst"

@@ -1,0 +1,10 @@
+mysql_root_password: 12345678
+mysql_databases:
+  - name: example_db
+    encoding: latin1
+    collation: latin1_general_ci
+mysql_users:
+  - name: developer
+    host: "%"
+    password: 12345678
+    priv: "example_db.*:ALL"
